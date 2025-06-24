@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>RC Dyno – Dashboard</title>
+<title>RC Dyno – Dashboard</title>
 
-<!-- type  -->
+<!-- fonts -->
 <link rel="preconnect" href="https://fonts.gstatic.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
 
@@ -12,154 +12,150 @@
   :root{
     --bg1:#0f1115;
     --bg2:#1a1d22;
-    --card:#dbdbdbe6;
+    --card:#2a2d33;
     --accent:#29c5ff;
-    --accent-bg:#29c5ff1a;
+    --accent-light:#29c5ff33;
+    --accent-bg-alt:#9aa7b533;
     --text:#e7edf4;
     --text-dim:#9aa7b5;
     --danger:#e25757;
+    --button-bg:#29c5ff;
+    --button-text:#ffffff;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
   body{
     font-family:'Inter',sans-serif;color:var(--text);
-    display:flex;justify-content:center;align-items:center;padding:1rem;
-    background:radial-gradient(ellipse at 50% 30%,var(--bg2) 0%,var(--bg1) 80%);
+    display:flex;justify-content:center;align-items:center;
+    background:var(--bg1);
   }
   .card{
-    width:clamp(320px,92vw,460px);
+    position:relative;
+    width:clamp(500px,90vw,900px);
     background:var(--card);
-    backdrop-filter:blur(14px);
-    border-radius:24px;
-    padding:2.2rem 2rem 1.8rem;
-    box-shadow:0 12px 32px #000a;
-    display:flex;flex-direction:column;align-items:center;
+    border-radius:16px;
+    padding:2rem 2.5rem 2.5rem;
+    box-shadow:0 8px 32px rgba(0,0,0,0.6);
   }
-  canvas#gauge{width:100%!important;height:260px!important}  /* fixed size */
-  .value{font-variant-numeric:tabular-nums;text-align:center;line-height:1}
-  .speed{font-size:2.9rem;font-weight:600;color:var(--accent);margin-top:1.1rem}
-  .rpm  {font-size:1.45rem;color:var(--text-dim);margin-top:.45rem}
-  .stopped{color:var(--danger)!important}
+  .controls{
+    position:absolute; top:1rem; right:1.5rem;
+  }
+  button{
+    padding:0.6rem 1.2rem; border:none; border-radius:6px;
+    background:var(--button-bg); color:var(--button-text);
+    font-weight:600; cursor:pointer; font-size:1rem;
+  }
+  button:hover{opacity:0.85}
+
+  .gauges{
+    display:grid;
+    grid-template-columns:1fr;
+    gap:2.5rem;
+    margin-top:1.5rem;
+  }
+  @media(min-width: 800px) {
+    .gauges{grid-template-columns:repeat(3, 1fr);}
+  }
+  .gauge-container{
+    background:rgba(255,255,255,0.1);
+    border-radius:12px;
+    padding:1.2rem;
+    position:relative;
+    text-align:center;
+  }
+  .gauge-container canvas{
+    width:100%!important; height:200px!important;
+  }
+  .title{
+    font-size:1.2rem; color:var(--text-dim);
+    margin-bottom:0.3rem;
+  }
+  .value{
+    font-variant-numeric:tabular-nums;
+    font-size:1.8rem; font-weight:600;
+    color:var(--accent);
+    margin-top:0.6rem;
+  }
+  .subvalue{
+    font-size:1rem; color:var(--text-dim);
+  }
+  .max-label{
+    position:absolute; bottom:1rem; width:100%;
+    font-size:0.9rem; color:var(--accent);
+  }
 </style>
 </head>
 <body>
 
 <div class="card">
-  <canvas id="gauge"></canvas>
-  <p id="speed" class="value speed">0.0 km/h</p>
-  <p id="rpm"   class="value rpm">0 rpm</p>
+  <div class="controls">
+    <button id="resetMax">Reset Max</button>
+  </div>
+
+  <div class="gauges">
+    <!-- Speed -->
+    <div class="gauge-container">
+      <div class="title">Speed</div>
+      <canvas id="gaugeSpeed"></canvas>
+      <div class="value" id="speed">0.0 km/h</div>
+      <div class="subvalue" id="rpm">0 rpm</div>
+    </div>
+
+    <!-- Torque -->
+    <div class="gauge-container">
+      <div class="title">Torque</div>
+      <canvas id="gaugeTorque"></canvas>
+      <div class="value" id="torque">0.00 Nm</div>
+      <div class="max-label" id="maxTorque">Max: 0.00 Nm</div>
+    </div>
+
+    <!-- Power -->
+    <div class="gauge-container">
+      <div class="title">Power</div>
+      <canvas id="gaugePower"></canvas>
+      <div class="value" id="power">0 W</div>
+      <div class="max-label" id="maxPower">Max: 0 W</div>
+    </div>
+  </div>
 </div>
 
-<!-- libs -->
+<!-- Chart.js -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
 <script>
-/* ---------- CONFIG ---------- */
-const MAX_SPEED = 30;          // km/h full‑scale of gauge
-const STOP_TIMEOUT = 1200;      // ms – after this, assume roller stopped
-/* ---------------------------- */
+const MAX_SPEED  = 30, MAX_TORQUE = 2.0, MAX_POWER = 50, STOP_TIMEOUT=1200;
+let maxTorque=0, maxPower=0, lastSample=Date.now();
 
-const ctx = document.getElementById('gauge');
+const needle = { id:'needle', afterDatasetDraw(c){
+  const {ctx} = c, arc = c.getDatasetMeta(0).data[0];
+  if(!arc)return; const {x:cx,y:cy,outerRadius:r}=arc;
+  const v=c._current||0, m=c.config.options._max;
+  const ang=-Math.PI/2+(v/m)*Math.PI;
+  ctx.save();ctx.translate(cx,cy);ctx.rotate(ang);
+  ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(0,-r*0.9);
+  ctx.lineWidth=3;ctx.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--accent');ctx.stroke();
+  ctx.beginPath();ctx.arc(0,0,5,0,2*Math.PI);ctx.fillStyle='#fff';ctx.fill();ctx  .restore();
+}};
+Chart.register(needle);
+function make(id,max){return new Chart(id,{type:'doughnut',data:{datasets:[{data:[0,max],backgroundColor:['var(--accent-light)','rgba(255,255,255,0.06)'],borderWidth:0,rotation:-90,circumference:180,cutout:'70%'}]},options:{animation:0,responsive:1,maintainAspectRatio:0,plugins:{legend:{display:0},tooltip:{enabled:0}},_max:max,_maxValue:max}});}
+const gSpeed=make(document.getElementById('gaugeSpeed'),MAX_SPEED);
+const gTorque=make(document.getElementById('gaugeTorque'),MAX_TORQUE);
+const gPower=make(document.getElementById('gaugePower'),MAX_POWER);
 
-/* --- custom plugin that draws a needle on top of the doughnut --- */
-const needlePlugin = {
-  id:'needle',
-  afterDatasetDraw(chart, args, pluginOpts){
-    const {ctx, chartArea:{width, height}} = chart;
-    const meta = chart.getDatasetMeta(0);
-    const arc  = meta.data[0];
-    if(!arc) return;
-
-    const cx = arc.x;
-    const cy = arc.y;
-    const r  = arc.outerRadius;
-    const v  = chart._currentSpeed ?? 0;           // km/h
-    const angle = (-Math.PI/2) + (v / MAX_SPEED) * Math.PI;  // -90° … +90°
-
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(angle);
-
-    /* needle */
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(0, -r * 0.88);
-    ctx.lineWidth = 3.5;
-    ctx.strokeStyle = getComputedStyle(document.documentElement)
-                      .getPropertyValue('--accent').trim();
-    ctx.stroke();
-
-    /* knob */
-    ctx.beginPath();
-    ctx.arc(0, 0, 6, 0, 2*Math.PI);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
-
-    ctx.restore();
-  }
-};
-
-Chart.register(needlePlugin);
-
-/* doughnut chart as the gauge underlay */
-const gauge = new Chart(ctx,{
-  type:'doughnut',
-  data:{
-    datasets:[{
-      data:[0, MAX_SPEED],                 // filled/unfilled arc
-      backgroundColor:['var(--accent-bg)','rgba(255,255,255,0.06)'],
-      borderWidth:0,
-      rotation:-90,                        // start at -90°
-      circumference:180,                   // half circle
-      cutout:'72%'
-    }]
-  },
-  options:{
-    responsive:true,maintainAspectRatio:false,
-    animation:{duration:0},
-    plugins:{legend:{display:false},tooltip:{enabled:false}}
-  }
-});
-
-/* --- DOM elements --- */
-const lblSpeed = document.getElementById('speed');
-const lblRPM   = document.getElementById('rpm');
-let lastSample = Date.now();
-
-/* --- fetch data from /data, update gauge & numbers --- */
-async function poll(){
-  try{
-    const res = await fetch('/data');
-    if(!res.ok) throw new Error(res.statusText);
-    const {speed,rpm} = await res.json();
-    updateUI(speed,rpm);
-    lastSample = Date.now();
-  }catch(e){console.error(e)}
+const L={speed:document.getElementById('speed'),rpm:document.getElementById('rpm'),torque:document.getElementById('torque'),power:document.getElementById('power'),maxT:document.getElementById('maxTorque'),maxP:document.getElementById('maxPower')};
+document.getElementById('resetMax').onclick=()=>{maxTorque=0;maxPower=0;L.maxT.textContent='Max: 0.00 Nm';L.maxP.textContent='Max: 0 W';};
+async function poll(){try{const r=await fetch('/data');const d=await r.json();update(d);}catch{}lastSample=Date.now();}
+function update({speed,rpm,torque,power}){
+  // speed
+  const v1=Math.min(speed,MAX_SPEED);gSpeed.data.datasets[0].data=[v1,MAX_SPEED-v1];gSpeed._current=v1;gSpeed.update();L.speed.textContent=`${speed.toFixed(1)} km/h`;L.rpm.textContent=`${rpm.toFixed(0)} rpm`;
+  // torque
+  const v2=Math.min(Math.abs(torque),MAX_TORQUE);gTorque.data.datasets[0].data=[v2,MAX_TORQUE-v2];gTorque._current=v2;gTorque.update();L.torque.textContent=`${torque.toFixed(2)} Nm`;
+  if(Math.abs(torque)>maxTorque){maxTorque=Math.abs(torque);L.maxT.textContent=`Max: ${maxTorque.toFixed(2)} Nm`;}
+  // power
+  const v3=Math.min(Math.abs(power),MAX_POWER);gPower.data.datasets[0].data=[v3,MAX_POWER-v3];gPower._current=v3;gPower.update();L.power.textContent=`${power.toFixed(0)} W`;
+  if(Math.abs(power)>maxPower){maxPower=Math.abs(power);L.maxP.textContent=`Max: ${maxPower.toFixed(0)} W`;}
 }
-
-/* --- apply new values to UI, redraw --- */
-function updateUI(speed,rpm){
-  const clamped = Math.min(speed, MAX_SPEED);
-  gauge.data.datasets[0].data[0] = clamped;
-  gauge.data.datasets[0].data[1] = MAX_SPEED - clamped;
-  gauge._currentSpeed = clamped;          // plugin reads this
-  gauge.update();
-
-  lblSpeed.textContent = `${speed.toFixed(1)} km/h`;
-  lblRPM.textContent   = `${rpm.toFixed(0)} rpm`;
-  lblSpeed.classList.toggle('stopped', rpm===0);
-}
-
-/* --- watchdog to zero display if no fresh sample --- */
-function watchdog(){
-  if(Date.now() - lastSample > STOP_TIMEOUT){
-    updateUI(0,0);
-  }
-}
-
-setInterval(poll, 200);
-setInterval(watchdog, 250);
-poll();           // kick‑off immediately
+function wd(){if(Date.now()-lastSample>STOP_TIMEOUT)update({speed:0,rpm:0,torque:0,power:0});}
+setInterval(poll,200);setInterval(wd,300);poll();
 </script>
 </body>
 </html>
