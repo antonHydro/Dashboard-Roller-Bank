@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RC Dyno – Dashboard</title>
+
+<!-- type  -->
+<link rel="preconnect" href="https://fonts.gstatic.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --bg1:#0f1115;
+    --bg2:#1a1d22;
+    --card:#dbdbdbe6;
+    --accent:#29c5ff;
+    --accent-bg:#29c5ff1a;
+    --text:#e7edf4;
+    --text-dim:#9aa7b5;
+    --danger:#e25757;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:'Inter',sans-serif;color:var(--text);
+    display:flex;justify-content:center;align-items:center;padding:1rem;
+    background:radial-gradient(ellipse at 50% 30%,var(--bg2) 0%,var(--bg1) 80%);
+  }
+  .card{
+    width:clamp(320px,92vw,460px);
+    background:var(--card);
+    backdrop-filter:blur(14px);
+    border-radius:24px;
+    padding:2.2rem 2rem 1.8rem;
+    box-shadow:0 12px 32px #000a;
+    display:flex;flex-direction:column;align-items:center;
+  }
+  canvas#gauge{width:100%!important;height:260px!important}  /* fixed size */
+  .value{font-variant-numeric:tabular-nums;text-align:center;line-height:1}
+  .speed{font-size:2.9rem;font-weight:600;color:var(--accent);margin-top:1.1rem}
+  .rpm  {font-size:1.45rem;color:var(--text-dim);margin-top:.45rem}
+  .stopped{color:var(--danger)!important}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <canvas id="gauge"></canvas>
+  <p id="speed" class="value speed">0.0 km/h</p>
+  <p id="rpm"   class="value rpm">0 rpm</p>
+</div>
+
+<!-- libs -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+/* ---------- CONFIG ---------- */
+const MAX_SPEED = 30;          // km/h full‑scale of gauge
+const STOP_TIMEOUT = 1200;      // ms – after this, assume roller stopped
+/* ---------------------------- */
+
+const ctx = document.getElementById('gauge');
+
+/* --- custom plugin that draws a needle on top of the doughnut --- */
+const needlePlugin = {
+  id:'needle',
+  afterDatasetDraw(chart, args, pluginOpts){
+    const {ctx, chartArea:{width, height}} = chart;
+    const meta = chart.getDatasetMeta(0);
+    const arc  = meta.data[0];
+    if(!arc) return;
+
+    const cx = arc.x;
+    const cy = arc.y;
+    const r  = arc.outerRadius;
+    const v  = chart._currentSpeed ?? 0;           // km/h
+    const angle = (-Math.PI/2) + (v / MAX_SPEED) * Math.PI;  // -90° … +90°
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+
+    /* needle */
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -r * 0.88);
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = getComputedStyle(document.documentElement)
+                      .getPropertyValue('--accent').trim();
+    ctx.stroke();
+
+    /* knob */
+    ctx.beginPath();
+    ctx.arc(0, 0, 6, 0, 2*Math.PI);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+
+    ctx.restore();
+  }
+};
+
+Chart.register(needlePlugin);
+
+/* doughnut chart as the gauge underlay */
+const gauge = new Chart(ctx,{
+  type:'doughnut',
+  data:{
+    datasets:[{
+      data:[0, MAX_SPEED],                 // filled/unfilled arc
+      backgroundColor:['var(--accent-bg)','rgba(255,255,255,0.06)'],
+      borderWidth:0,
+      rotation:-90,                        // start at -90°
+      circumference:180,                   // half circle
+      cutout:'72%'
+    }]
+  },
+  options:{
+    responsive:true,maintainAspectRatio:false,
+    animation:{duration:0},
+    plugins:{legend:{display:false},tooltip:{enabled:false}}
+  }
+});
+
+/* --- DOM elements --- */
+const lblSpeed = document.getElementById('speed');
+const lblRPM   = document.getElementById('rpm');
+let lastSample = Date.now();
+
+/* --- fetch data from /data, update gauge & numbers --- */
+async function poll(){
+  try{
+    const res = await fetch('/data');
+    if(!res.ok) throw new Error(res.statusText);
+    const {speed,rpm} = await res.json();
+    updateUI(speed,rpm);
+    lastSample = Date.now();
+  }catch(e){console.error(e)}
+}
+
+/* --- apply new values to UI, redraw --- */
+function updateUI(speed,rpm){
+  const clamped = Math.min(speed, MAX_SPEED);
+  gauge.data.datasets[0].data[0] = clamped;
+  gauge.data.datasets[0].data[1] = MAX_SPEED - clamped;
+  gauge._currentSpeed = clamped;          // plugin reads this
+  gauge.update();
+
+  lblSpeed.textContent = `${speed.toFixed(1)} km/h`;
+  lblRPM.textContent   = `${rpm.toFixed(0)} rpm`;
+  lblSpeed.classList.toggle('stopped', rpm===0);
+}
+
+/* --- watchdog to zero display if no fresh sample --- */
+function watchdog(){
+  if(Date.now() - lastSample > STOP_TIMEOUT){
+    updateUI(0,0);
+  }
+}
+
+setInterval(poll, 200);
+setInterval(watchdog, 250);
+poll();           // kick‑off immediately
+</script>
+</body>
+</html>
