@@ -52,8 +52,8 @@ project-root/
 1. **Clone the repository**:
 
    ```bash
-   git clone https://github.com/ALintermans/rc-dyno-dashboard.git
-   cd rc-dyno-dashboard
+   git clone https://github.com/antonHydro/Dashboard-Roller-Bank.git
+   cd Dashboard-Roller-Bank
    ```
 
 2. **Create a Python virtual environment** (optional but recommended):
